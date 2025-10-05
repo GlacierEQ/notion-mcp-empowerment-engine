@@ -1,0 +1,60 @@
+# 🦁 LIONAGI ORCHESTRATOR - Specialized Container
+# Optimized for multi-model AI coordination
+
+FROM python:3.11-slim AS python-base
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install LionAGI and dependencies
+RUN pip install --no-cache-dir \
+    'lionagi[all]>=0.12.8' \
+    'openai>=1.50.0' \
+    'anthropic>=0.16.0' \
+    'claude-code-sdk>=0.0.10' \
+    'pandas>=2.2.0' \
+    'aiohttp>=3.12.0' \
+    'redis>=5.0.0'
+
+# Node.js stage
+FROM node:20-alpine AS node-stage
+
+WORKDIR /app
+
+# Copy and install Node dependencies
+COPY package*.json ./
+RUN npm ci --only=production
+
+# Final stage
+FROM python:3.11-slim
+
+# Install Node.js
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs
+
+# Copy Python packages
+COPY --from=python-base /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=python-base /usr/local/bin /usr/local/bin
+
+# Copy Node modules
+COPY --from=node-stage /app/node_modules ./node_modules
+
+WORKDIR /app
+
+# Copy application files
+COPY src/lionagi-integration/ ./lionagi-integration/
+COPY requirements.txt ./
+
+# Create directories
+RUN mkdir -p logs sessions temp
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD python3 -c "import lionagi; print('LionAGI OK')" || exit 1
+
+EXPOSE 8000 8001
+
+CMD ["python3", "-m", "lionagi_bridge"]
